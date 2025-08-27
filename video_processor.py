@@ -128,6 +128,11 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger, no
     
     logger.info(f"English tracks found at indices: {english_track_indices}")
     
+    # Check if all audio tracks are already English (no processing needed)
+    if len(english_track_indices) == len(audio_tracks):
+        logger.info(f"Skipping (all {len(audio_tracks)} audio tracks are already English): {file_path}")
+        return True
+    
     if dry_run:
         tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] not in english_track_indices]
         logger.info(f"DRY RUN: Would keep {len(english_track_indices)} English tracks at indices: {english_track_indices}")
