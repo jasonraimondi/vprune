@@ -70,28 +70,29 @@ def get_audio_tracks(video_info: Dict) -> List[Dict]:
             })
     return audio_tracks
 
-def find_english_track(audio_tracks: List[Dict]) -> Optional[int]:
-    """Find the English audio track index"""
+def find_english_tracks(audio_tracks: List[Dict]) -> List[int]:
+    """Find all English audio track indices"""
     # Common English language codes
     english_codes = {'en', 'eng', 'english'}
+    english_track_indices = []
     
     # First, look for explicitly tagged English tracks
     for track in audio_tracks:
         lang = track['language'].lower()
         if lang in english_codes:
-            return track['index']
+            english_track_indices.append(track['index'])
     
-    # If no explicit English tag, check titles for English indicators
-    for track in audio_tracks:
-        title = track.get('title', '').lower()
-        if any(eng_word in title for eng_word in ['english', 'eng']):
-            return track['index']
+    # If no explicit English tags found, check titles for English indicators
+    if not english_track_indices:
+        for track in audio_tracks:
+            title = track.get('title', '').lower()
+            if any(eng_word in title for eng_word in ['english', 'eng']):
+                english_track_indices.append(track['index'])
     
-    # If still no English track found, return None
-    return None
+    return english_track_indices
 
 def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger, no_english_log: str) -> bool:
-    """Process a single video file to keep only English audio track"""
+    """Process a single video file to keep only English audio tracks"""
     logger.info(f"Processing: {file_path}")
     
     # Get video information
@@ -114,22 +115,22 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger, no
     for track in audio_tracks:
         logger.info(f"  Track {track['index']}: {track['language']} - {track['title']} ({track['codec']})")
     
-    # Find English track
-    english_track_index = find_english_track(audio_tracks)
+    # Find English tracks
+    english_track_indices = find_english_tracks(audio_tracks)
     
-    if english_track_index is None:
-        logger.warning(f"No English audio track found in: {file_path}")
+    if not english_track_indices:
+        logger.warning(f"No English audio tracks found in: {file_path}")
         with open(no_english_log, 'a') as f:
             f.write(f"{file_path}\n")
             f.write(f"  Audio tracks: {json.dumps(audio_tracks, indent=2)}\n")
             f.write("---\n")
         return True
     
-    logger.info(f"English track found at index: {english_track_index}")
+    logger.info(f"English tracks found at indices: {english_track_indices}")
     
     if dry_run:
-        tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] != english_track_index]
-        logger.info(f"DRY RUN: Would keep English track at index {english_track_index}")
+        tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] not in english_track_indices]
+        logger.info(f"DRY RUN: Would keep {len(english_track_indices)} English tracks at indices: {english_track_indices}")
         logger.info(f"DRY RUN: Would remove {len(tracks_to_remove)} audio tracks: {tracks_to_remove}")
         logger.info(f"DRY RUN: File would be processed and overwritten: {file_path}")
         return True
@@ -139,25 +140,31 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger, no
     
     try:
         # Log processing start
-        tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] != english_track_index]
+        tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] not in english_track_indices]
         logger.info(f"Processing file: {file_path}")
-        logger.info(f"Keeping English track at index {english_track_index}")
+        logger.info(f"Keeping {len(english_track_indices)} English tracks at indices: {english_track_indices}")
         logger.info(f"Removing {len(tracks_to_remove)} audio tracks: {tracks_to_remove}")
         
         # Rename original to backup
         logger.info(f"Creating backup: {backup_path}")
         os.rename(file_path, backup_path)
         
-        # Build ffmpeg command to keep only English audio track
+        # Build ffmpeg command to keep all English audio tracks
         cmd = [
             'ffmpeg', '-i', backup_path,
             '-map', '0:v',  # Copy all video streams
-            '-map', f'0:{english_track_index}',  # Copy only the English audio track by absolute stream index
+        ]
+        
+        # Add mapping for each English audio track
+        for track_index in english_track_indices:
+            cmd.extend(['-map', f'0:{track_index}'])
+        
+        cmd.extend([
             '-c:v', 'copy',  # Copy video without re-encoding
             '-c:a', 'copy',  # Copy audio without re-encoding
             '-y',  # Overwrite output file
             file_path
-        ]
+        ])
         
         logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -166,7 +173,7 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger, no
             # Success - remove backup
             os.remove(backup_path)
             logger.info(f"Successfully processed and removed backup: {file_path}")
-            logger.info(f"File now contains {len([stream for stream in video_info.get('streams', []) if stream.get('codec_type') == 'video'])} video stream(s) and 1 audio stream")
+            logger.info(f"File now contains {len([stream for stream in video_info.get('streams', []) if stream.get('codec_type') == 'video'])} video stream(s) and {len(english_track_indices)} audio stream(s)")
             return True
         else:
             # Error - restore backup
@@ -195,7 +202,7 @@ def find_video_files(directory: str) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Remove all audio tracks except English from video files"
+        description="Remove all non-English audio tracks from video files, keeping all English tracks"
     )
     parser.add_argument(
         'directory', 
