@@ -19,4 +19,4 @@ RUN mkdir -p /videos
 
 # Set the default command
 ENTRYPOINT ["python3", "/app/video_processor.py"]
-CMD ["/videos"]
+CMD ["/videos", "--log-dir", "/app/logs"]

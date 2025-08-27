@@ -20,6 +20,10 @@ def setup_logging(log_file: str = 'audio_processing.log') -> logging.Logger:
     logger = logging.getLogger('video_processor')
     logger.setLevel(logging.INFO)
     
+    # Ensure log directory exists
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    
     # File handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.INFO)
@@ -86,7 +90,7 @@ def find_english_track(audio_tracks: List[Dict]) -> Optional[int]:
     # If still no English track found, return None
     return None
 
-def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger) -> bool:
+def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger, no_english_log: str) -> bool:
     """Process a single video file to keep only English audio track"""
     logger.info(f"Processing: {file_path}")
     
@@ -100,7 +104,10 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger) ->
     audio_tracks = get_audio_tracks(video_info)
     
     if len(audio_tracks) <= 1:
-        logger.info(f"Skipping (single or no audio track): {file_path}")
+        if len(audio_tracks) == 0:
+            logger.info(f"Skipping (no audio tracks): {file_path}")
+        else:
+            logger.info(f"Skipping (only one audio track): {file_path}")
         return True
     
     logger.info(f"Found {len(audio_tracks)} audio tracks")
@@ -112,7 +119,7 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger) ->
     
     if english_track_index is None:
         logger.warning(f"No English audio track found in: {file_path}")
-        with open('no_english_tracks.log', 'a') as f:
+        with open(no_english_log, 'a') as f:
             f.write(f"{file_path}\n")
             f.write(f"  Audio tracks: {json.dumps(audio_tracks, indent=2)}\n")
             f.write("---\n")
@@ -121,14 +128,24 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger) ->
     logger.info(f"English track found at index: {english_track_index}")
     
     if dry_run:
-        logger.info(f"DRY RUN: Would remove all audio tracks except index {english_track_index}")
+        tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] != english_track_index]
+        logger.info(f"DRY RUN: Would keep English track at index {english_track_index}")
+        logger.info(f"DRY RUN: Would remove {len(tracks_to_remove)} audio tracks: {tracks_to_remove}")
+        logger.info(f"DRY RUN: File would be processed and overwritten: {file_path}")
         return True
     
     # Create backup file name
     backup_path = f"{file_path}.backup"
     
     try:
+        # Log processing start
+        tracks_to_remove = [track['index'] for track in audio_tracks if track['index'] != english_track_index]
+        logger.info(f"Processing file: {file_path}")
+        logger.info(f"Keeping English track at index {english_track_index}")
+        logger.info(f"Removing {len(tracks_to_remove)} audio tracks: {tracks_to_remove}")
+        
         # Rename original to backup
+        logger.info(f"Creating backup: {backup_path}")
         os.rename(file_path, backup_path)
         
         # Build ffmpeg command to keep only English audio track
@@ -148,12 +165,14 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger) ->
         if result.returncode == 0:
             # Success - remove backup
             os.remove(backup_path)
-            logger.info(f"Successfully processed: {file_path}")
+            logger.info(f"Successfully processed and removed backup: {file_path}")
+            logger.info(f"File now contains {len([stream for stream in video_info.get('streams', []) if stream.get('codec_type') == 'video'])} video stream(s) and 1 audio stream")
             return True
         else:
             # Error - restore backup
+            logger.error(f"ffmpeg failed, restoring backup...")
             os.rename(backup_path, file_path)
-            logger.error(f"ffmpeg failed for {file_path}: {result.stderr}")
+            logger.error(f"ffmpeg error for {file_path}: {result.stderr}")
             return False
             
     except Exception as e:
@@ -192,6 +211,10 @@ def main():
         default='audio_processing.log',
         help='Log file path (default: audio_processing.log)'
     )
+    parser.add_argument(
+        '--log-dir',
+        help='Log directory path (overrides log-file directory)'
+    )
     
     args = parser.parse_args()
     
@@ -199,17 +222,34 @@ def main():
         print(f"Error: Directory '{args.directory}' does not exist")
         sys.exit(1)
     
+    # Determine log directory from args, environment, or current directory
+    log_dir = args.log_dir or os.environ.get('LOG_DIR')
+    
+    # Determine log file path
+    log_file = args.log_file
+    if log_dir:
+        log_file = os.path.join(log_dir, os.path.basename(args.log_file))
+    
+    # Determine no-english log file path
+    no_english_log = 'no_english_tracks.log'
+    if log_dir:
+        no_english_log = os.path.join(log_dir, 'no_english_tracks.log')
+    
     # Setup logging
-    logger = setup_logging(args.log_file)
+    logger = setup_logging(log_file)
     
     if args.dry_run:
         logger.info("=== DRY RUN MODE - No changes will be made ===")
     
     logger.info(f"Starting audio track processing in: {args.directory}")
+    logger.info(f"Log files will be written to: {os.path.dirname(log_file)}")
     
     # Find all video files
     video_files = find_video_files(args.directory)
-    logger.info(f"Found {len(video_files)} video files")
+    logger.info(f"Found {len(video_files)} video files to scan")
+    
+    # Log supported extensions
+    logger.info(f"Scanning for files with extensions: {', '.join(sorted(VIDEO_EXTENSIONS))}")
     
     if not video_files:
         logger.info("No video files found")
@@ -218,13 +258,23 @@ def main():
     # Process each video file
     success_count = 0
     for file_path in video_files:
-        if process_video_file(file_path, args.dry_run, logger):
+        if process_video_file(file_path, args.dry_run, logger, no_english_log):
             success_count += 1
     
+    logger.info("=" * 50)
     logger.info(f"Processing complete: {success_count}/{len(video_files)} files processed successfully")
     
-    if not args.dry_run and os.path.exists('no_english_tracks.log'):
-        logger.info("Check 'no_english_tracks.log' for files without English audio tracks")
+    if args.dry_run:
+        logger.info("DRY RUN COMPLETE - No files were modified")
+    else:
+        if os.path.exists(no_english_log):
+            with open(no_english_log, 'r') as f:
+                no_english_count = len([line for line in f if line.strip() and not line.startswith('  ') and line != '---\n'])
+            logger.info(f"Files without English tracks: {no_english_count} (see '{no_english_log}')")
+        else:
+            logger.info("All processed files had identifiable English audio tracks")
+        
+        logger.info(f"All log files saved to: {os.path.dirname(log_file)}")
 
 if __name__ == "__main__":
     main()

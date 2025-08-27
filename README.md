@@ -1,4 +1,4 @@
-# Video Audio Track Processor
+# Video Audio Track Processor (VIBE CODE WARNING)
 
 This tool processes video files in a directory tree, removing all audio tracks except the English track. It's designed to clean up video collections with multiple audio tracks.
 
