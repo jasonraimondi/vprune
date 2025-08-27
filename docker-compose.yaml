@@ -1,0 +1,7 @@
+services:
+  video-processor:
+    build: .
+    volumes:
+      - ./test_videos:/videos  # Mount your video directory here
+      - ./logs:/app/logs  # Mount logs directory for persistence
+    working_dir: /app
