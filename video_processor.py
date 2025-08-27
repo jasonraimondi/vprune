@@ -135,7 +135,7 @@ def process_video_file(file_path: str, dry_run: bool, logger: logging.Logger) ->
         cmd = [
             'ffmpeg', '-i', backup_path,
             '-map', '0:v',  # Copy all video streams
-            '-map', f'0:a:{english_track_index}',  # Copy only the English audio track
+            '-map', f'0:{english_track_index}',  # Copy only the English audio track by absolute stream index
             '-c:v', 'copy',  # Copy video without re-encoding
             '-c:a', 'copy',  # Copy audio without re-encoding
             '-y',  # Overwrite output file
